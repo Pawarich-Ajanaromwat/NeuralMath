@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -)"
+      "Bash(python -)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
     ]
   }
 }
