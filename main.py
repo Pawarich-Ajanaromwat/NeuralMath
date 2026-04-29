@@ -26,31 +26,30 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # ─── Directories & Config ─────────────────────────────────────────────────────
 
-BASE_DIR    = Path(__file__).parent
-INPUT_DIR   = BASE_DIR / "input"
-DONE_DIR    = BASE_DIR / "input_done"
-OUTPUT_DIR  = BASE_DIR / "output"
-LOG_DIR     = BASE_DIR / "log"
+BASE_DIR = Path(__file__).parent
+INPUT_DIR = BASE_DIR / "input"
+DONE_DIR = BASE_DIR / "input_done"
+OUTPUT_DIR = BASE_DIR / "output"
+LOG_DIR = BASE_DIR / "log"
 CONFIG_FILE = BASE_DIR / "config.json"
-STATS_FILE  = BASE_DIR / "stats.json"
+STATS_FILE = BASE_DIR / "stats.json"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-
 _DEFAULT_CONFIG: dict = {"batch_size": 5}
 
 # Adaptive max_tokens bounds
-_MIN_MAX_TOKENS     = 800
-_MAX_MAX_TOKENS     = 4096
-_DEFAULT_MAX_TOKENS = 1500   # used when history is too short
-_STATS_WINDOW       = 50     # keep last N output-token samples
-_STATS_MIN_SAMPLES  = 5      # need at least this many before adapting
+_MIN_MAX_TOKENS = 800
+_MAX_MAX_TOKENS = 4096
+_DEFAULT_MAX_TOKENS = 1500  # used when history is too short
+_STATS_WINDOW = 50          # keep last N output-token samples
+_STATS_MIN_SAMPLES = 5      # need at least this many before adapting
 
 # claude-sonnet-4-6 pricing (USD per 1 M tokens)
 _PRICE_USD = {
-    "input":        3.00,
-    "output":      15.00,
-    "cache_write":  3.75,   # cache creation (25 % more than base input)
-    "cache_read":   0.30,   # cache hit      (90 % cheaper than base input)
+    "input": 3.00,
+    "output": 15.00,
+    "cache_write": 3.75,  # cache creation (25% more than base input)
+    "cache_read": 0.30,   # cache hit (90% cheaper than base input)
 }
 
 
@@ -58,23 +57,23 @@ class Usage:
     """Accumulates token counts and computes estimated cost across multiple API calls."""
 
     def __init__(self) -> None:
-        self.input_tokens        = 0
-        self.output_tokens       = 0
-        self.cache_write_tokens  = 0
-        self.cache_read_tokens   = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_write_tokens = 0
+        self.cache_read_tokens = 0
 
-    def add(self, u) -> None:
-        self.input_tokens       += u.input_tokens        or 0
-        self.output_tokens      += u.output_tokens       or 0
-        self.cache_write_tokens += getattr(u, "cache_creation_input_tokens", 0) or 0
-        self.cache_read_tokens  += getattr(u, "cache_read_input_tokens",     0) or 0
+    def add(self, api_usage) -> None:
+        self.input_tokens += api_usage.input_tokens or 0
+        self.output_tokens += api_usage.output_tokens or 0
+        self.cache_write_tokens += getattr(api_usage, "cache_creation_input_tokens", 0) or 0
+        self.cache_read_tokens += getattr(api_usage, "cache_read_input_tokens", 0) or 0
 
     def cost_usd(self) -> float:
         return (
-            self.input_tokens       / 1_000_000 * _PRICE_USD["input"]       +
-            self.output_tokens      / 1_000_000 * _PRICE_USD["output"]      +
-            self.cache_write_tokens / 1_000_000 * _PRICE_USD["cache_write"] +
-            self.cache_read_tokens  / 1_000_000 * _PRICE_USD["cache_read"]
+            self.input_tokens / 1_000_000 * _PRICE_USD["input"]
+            + self.output_tokens / 1_000_000 * _PRICE_USD["output"]
+            + self.cache_write_tokens / 1_000_000 * _PRICE_USD["cache_write"]
+            + self.cache_read_tokens / 1_000_000 * _PRICE_USD["cache_read"]
         )
 
     def summary(self) -> str:
@@ -86,12 +85,11 @@ class Usage:
             lines.append(f"  Cache write tokens : {self.cache_write_tokens:,}")
         if self.cache_read_tokens:
             lines.append(f"  Cache read tokens  : {self.cache_read_tokens:,}")
-        # lines.append(f"  Est. cost (USD)    : ${self.cost_usd():.4f}")
         cost = self.cost_usd()
         if cost < 0.001:
-            lines.append(f"  Est. cost (USD)    : ${cost:.2e} : thb {cost*33:.2f}")   # → $4.39e-05
+            lines.append(f"  Est. cost (USD)    : ${cost:.2e} : thb {cost * 33:.2f}")
         else:
-            lines.append(f"  Est. cost (USD)    : ${cost:.6f} : thb {cost*33:.2f}")
+            lines.append(f"  Est. cost (USD)    : ${cost:.6f} : thb {cost * 33:.2f}")
         return "\n".join(lines)
 
 
@@ -121,9 +119,9 @@ def compute_max_tokens(samples: list[int]) -> int:
     """Return adaptive max_tokens from historical output token counts (p90 + 20% buffer)."""
     if len(samples) < _STATS_MIN_SAMPLES:
         return _DEFAULT_MAX_TOKENS
-    p90 = sorted(samples)[int(len(samples) * 0.9)]
-    adaptive = int(p90 * 1.2)
-    return max(_MIN_MAX_TOKENS, min(_MAX_MAX_TOKENS, adaptive))
+    ninetieth_percentile = sorted(samples)[int(len(samples) * 0.9)]
+    adaptive_limit = int(ninetieth_percentile * 1.2)
+    return max(_MIN_MAX_TOKENS, min(_MAX_MAX_TOKENS, adaptive_limit))
 
 
 # ─── Font Resolution ──────────────────────────────────────────────────────────
@@ -151,23 +149,23 @@ _FONT_CANDIDATES = [
 
 
 def _find_font(filenames: list[str]) -> Path | None:
-    for d in _FONT_SEARCH_DIRS:
-        for name in filenames:
-            p = d / name
-            if p.exists():
-                return p
+    for search_dir in _FONT_SEARCH_DIRS:
+        for filename in filenames:
+            candidate_path = search_dir / filename
+            if candidate_path.exists():
+                return candidate_path
     return None
 
 
 def resolve_fonts() -> tuple[str, str, str]:
     """Return (fonts_posix_dir, reg_stem, bold_stem) for the best available Thai font."""
-    for _, _, reg_files, bold_files in _FONT_CANDIDATES:
-        reg_path = _find_font(reg_files)
-        if reg_path is None:
+    for _, _, regular_files, bold_files in _FONT_CANDIDATES:
+        regular_font_path = _find_font(regular_files)
+        if regular_font_path is None:
             continue
-        bold_path = _find_font(bold_files) or reg_path
-        print(f"  Font: {reg_path.name}  +  {bold_path.name}")
-        return reg_path.parent.as_posix() + "/", reg_path.stem, bold_path.stem
+        bold_font_path = _find_font(bold_files) or regular_font_path
+        print(f"  Font: {regular_font_path.name}  +  {bold_font_path.name}")
+        return regular_font_path.parent.as_posix() + "/", regular_font_path.stem, bold_font_path.stem
     print("  Warning: No Thai font found, using default.")
     return "", "", ""
 
@@ -179,19 +177,19 @@ _INLINE_MATH_RE = re.compile(r"((?<!\$)\$[^$\n]+?\$(?!\$))")
 
 def latex_escape(text: str) -> str:
     """Escape LaTeX special chars in plain text (not inside math mode)."""
-    for char, esc in [
+    for char, escaped in [
         ("\\", "\\textbackslash{}"),
-        ("&",  "\\&"),
-        ("%",  "\\%"),
-        ("#",  "\\#"),
-        ("$",  "\\$"),
-        ("_",  "\\_"),
-        ("{",  "\\{"),
-        ("}",  "\\}"),
-        ("~",  "\\textasciitilde{}"),
-        ("^",  "\\textasciicircum{}"),
+        ("&", "\\&"),
+        ("%", "\\%"),
+        ("#", "\\#"),
+        ("$", "\\$"),
+        ("_", "\\_"),
+        ("{", "\\{"),
+        ("}", "\\}"),
+        ("~", "\\textasciitilde{}"),
+        ("^", "\\textasciicircum{}"),
     ]:
-        text = text.replace(char, esc)
+        text = text.replace(char, escaped)
     return text
 
 
@@ -268,180 +266,184 @@ _UNICODE_TO_LATEX: dict[str, str] = {
 
 def apply_inline_latex(text: str) -> str:
     """Convert inline markdown and $...$ math to LaTeX markup."""
-    parts = _INLINE_MATH_RE.split(text)
-    result: list[str] = []
-    for i, part in enumerate(parts):
-        if i % 2 == 1:
-            result.append(part)  # $...$ — already valid LaTeX math
+    text_parts = _INLINE_MATH_RE.split(text)
+    output_parts: list[str] = []
+    for index, part in enumerate(text_parts):
+        if index % 2 == 1:
+            output_parts.append(part)  # $...$ — already valid LaTeX math
         else:
-            s = latex_escape(part)
-            s = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", s)
-            s = re.sub(r"\*(.+?)\*",     r"\\textit{\1}", s)
-            s = re.sub(r"`(.+?)`",       r"\\texttt{\1}", s)
+            escaped_text = latex_escape(part)
+            escaped_text = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", escaped_text)
+            escaped_text = re.sub(r"\*(.+?)\*", r"\\textit{\1}", escaped_text)
+            escaped_text = re.sub(r"`(.+?)`", r"\\texttt{\1}", escaped_text)
             # Convert Unicode math/Greek (after escaping so inserted $ are not re-escaped)
-            for uni, ltx in _UNICODE_TO_LATEX.items():
-                s = s.replace(uni, ltx)
+            for unicode_char, latex_macro in _UNICODE_TO_LATEX.items():
+                escaped_text = escaped_text.replace(unicode_char, latex_macro)
             # Strip remaining astral-plane emoji (U+10000+) that Laksaman cannot render
-            s = re.sub(r"[\U00010000-\U0010FFFF]", "", s)
-            result.append(s)
-    return "".join(result)
+            escaped_text = re.sub(r"[\U00010000-\U0010FFFF]", "", escaped_text)
+            output_parts.append(escaped_text)
+    return "".join(output_parts)
+
+
+def _render_display_math(lines: list[str], i: int) -> tuple[str, int]:
+    """Parse $$...$$ block starting at line i; return (latex_line, next_i)."""
+    inner = lines[i].lstrip()[2:]
+    if inner.endswith("$$"):
+        return f"\\[{inner[:-2].strip()}\\]", i + 1
+    math_parts = [inner] if inner.strip() else []
+    i += 1
+    while i < len(lines):
+        line = lines[i]
+        if "$$" in line:
+            before = line[: line.index("$$")].strip()
+            if before:
+                math_parts.append(before)
+            return "\\[" + " ".join(p for p in math_parts if p) + "\\]", i + 1
+        math_parts.append(line.rstrip())
+        i += 1
+    return "\\[" + " ".join(p for p in math_parts if p) + "\\]", i
+
+
+def _render_code_block(lines: list[str], i: int) -> tuple[list[str], int]:
+    """Parse ```...``` block starting at line i; return (latex_lines, next_i)."""
+    code_lines: list[str] = []
+    i += 1
+    while i < len(lines) and not lines[i].strip().startswith("```"):
+        code_lines.append(lines[i])
+        i += 1
+    return ["\\begin{verbatim}", *code_lines, "\\end{verbatim}"], i + 1
+
+
+def _render_table(lines: list[str], i: int) -> tuple[list[str], int]:
+    """Parse markdown table starting at line i; return (latex_lines, next_i)."""
+    table_lines: list[str] = [lines[i].strip()]
+    i += 1
+    while i < len(lines) and lines[i].strip().startswith("|"):
+        table_lines.append(lines[i].strip())
+        i += 1
+
+    header: list[str] = []
+    body: list[list[str]] = []
+    for table_line in table_lines:
+        cells = [c.strip() for c in table_line.strip("|").split("|")]
+        if all(re.match(r"^[-: ]+$", c) for c in cells if c):
+            continue  # separator row
+        if not header:
+            header = cells
+        else:
+            body.append(cells)
+
+    if not header:
+        return [], i
+
+    ncols = len(header)
+    col_spec = "|" + "c|" * ncols
+    latex_lines: list[str] = [
+        "\\begin{center}",
+        f"\\begin{{tabular}}{{{col_spec}}}",
+        "\\hline",
+    ]
+    header_cells = " & ".join(f"\\textbf{{{apply_inline_latex(c)}}}" for c in header)
+    latex_lines.append(f"  {header_cells} \\\\")
+    latex_lines.append("\\hline\\hline")
+    for row in body:
+        padded = (row + [""] * ncols)[:ncols]
+        row_cells = " & ".join(apply_inline_latex(c) for c in padded)
+        latex_lines.append(f"  {row_cells} \\\\")
+        latex_lines.append("\\hline")
+    latex_lines.extend(["\\end{tabular}", "\\end{center}"])
+    return latex_lines, i
 
 
 def md_to_latex(text: str) -> str:
     """Convert Claude's markdown (with LaTeX math) to a LaTeX body fragment."""
-    lines   = text.splitlines()
-    out:    list[str] = []
-    i       = 0
-    in_item = False
-    in_enum = False
+    lines = text.splitlines()
+    output: list[str] = []
+    i = 0
+    in_bullet_list = False
+    in_ordered_list = False
 
     def flush_lists() -> None:
-        nonlocal in_item, in_enum
-        if in_item:
-            out.append("\\end{itemize}")
-            in_item = False
-        if in_enum:
-            out.append("\\end{enumerate}")
-            in_enum = False
+        nonlocal in_bullet_list, in_ordered_list
+        if in_bullet_list:
+            output.append("\\end{itemize}")
+            in_bullet_list = False
+        if in_ordered_list:
+            output.append("\\end{enumerate}")
+            in_ordered_list = False
 
     while i < len(lines):
-        raw      = lines[i].rstrip()
-        stripped = raw.lstrip()
+        line_content = lines[i].rstrip().lstrip()
 
-        # Blank line
-        if not stripped:
+        if not line_content:
             flush_lists()
-            out.append("")
+            output.append("")
             i += 1
             continue
 
-        # Display math  $$...$$  →  \[...\]
-        if stripped.startswith("$$"):
+        if line_content.startswith("$$"):
             flush_lists()
-            inner = stripped[2:]
-            if inner.endswith("$$"):
-                out.append(f"\\[{inner[:-2].strip()}\\]")
-                i += 1
-            else:
-                parts: list[str] = [inner] if inner.strip() else []
-                i += 1
-                while i < len(lines):
-                    line = lines[i]
-                    if "$$" in line:
-                        before = line[: line.index("$$")].strip()
-                        if before:
-                            parts.append(before)
-                        i += 1
-                        break
-                    parts.append(line.rstrip())
-                    i += 1
-                out.append("\\[" + " ".join(p for p in parts if p) + "\\]")
+            latex_line, i = _render_display_math(lines, i)
+            output.append(latex_line)
             continue
 
-        # Fenced code block
-        if stripped.startswith("```"):
+        if line_content.startswith("```"):
             flush_lists()
-            code: list[str] = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code.append(lines[i])
-                i += 1
-            out.extend(["\\begin{verbatim}", *code, "\\end{verbatim}"])
-            i += 1
+            latex_lines, i = _render_code_block(lines, i)
+            output.extend(latex_lines)
             continue
 
-        # Markdown table  |col|col|...
-        if stripped.startswith("|"):
+        if line_content.startswith("|"):
             flush_lists()
-            table_lines: list[str] = [stripped]
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                table_lines.append(lines[i].strip())
-                i += 1
-            header: list[str] = []
-            body: list[list[str]] = []
-            for tline in table_lines:
-                cells = [c.strip() for c in tline.strip("|").split("|")]
-                if all(re.match(r"^[-: ]+$", c) for c in cells if c):
-                    continue  # separator row
-                if not header:
-                    header = cells
-                else:
-                    body.append(cells)
-            if header:
-                ncols = len(header)
-                col_spec = "|" + "c|" * ncols
-                out.append("\\begin{center}")
-                out.append(f"\\begin{{tabular}}{{{col_spec}}}")
-                out.append("\\hline")
-                hcells = " & ".join(
-                    f"\\textbf{{{apply_inline_latex(c)}}}" for c in header
-                )
-                out.append(f"  {hcells} \\\\")
-                out.append("\\hline\\hline")
-                for row in body:
-                    padded = (row + [""] * ncols)[:ncols]
-                    rcells = " & ".join(apply_inline_latex(c) for c in padded)
-                    out.append(f"  {rcells} \\\\")
-                    out.append("\\hline")
-                out.append("\\end{tabular}")
-                out.append("\\end{center}")
+            latex_lines, i = _render_table(lines, i)
+            output.extend(latex_lines)
             continue
 
-        # ATX headings
-        if stripped.startswith("### "):
+        if line_content.startswith("### "):
             flush_lists()
-            out.append(f"\\subsubsection*{{{apply_inline_latex(stripped[4:])}}}")
-        elif stripped.startswith("## "):
+            output.append(f"\\subsubsection*{{{apply_inline_latex(line_content[4:])}}}")
+        elif line_content.startswith("## "):
             flush_lists()
-            out.append(f"\\subsection*{{{apply_inline_latex(stripped[3:])}}}")
-        elif stripped.startswith("# "):
+            output.append(f"\\subsection*{{{apply_inline_latex(line_content[3:])}}}")
+        elif line_content.startswith("# "):
             flush_lists()
-            out.append(f"\\section*{{{apply_inline_latex(stripped[2:])}}}")
-
-        # Unordered list
-        elif stripped.startswith(("- ", "* ", "+ ")):
-            if not in_item:
+            output.append(f"\\section*{{{apply_inline_latex(line_content[2:])}}}")
+        elif line_content.startswith(("- ", "* ", "+ ")):
+            if not in_bullet_list:
                 flush_lists()
-                out.append("\\begin{itemize}")
-                in_item = True
-            out.append(f"  \\item {apply_inline_latex(stripped[2:])}")
-
-        # Ordered list
-        elif re.match(r"^\d+[.)]\s", stripped):
-            if not in_enum:
+                output.append("\\begin{itemize}")
+                in_bullet_list = True
+            output.append(f"  \\item {apply_inline_latex(line_content[2:])}")
+        elif re.match(r"^\d+[.)]\s", line_content):
+            if not in_ordered_list:
                 flush_lists()
-                out.append("\\begin{enumerate}")
-                in_enum = True
-            rest = re.split(r"^\d+[.)]\s", stripped, maxsplit=1)
-            out.append(f"  \\item {apply_inline_latex(rest[1] if len(rest) > 1 else stripped)}")
-
-        # Horizontal rule
-        elif re.match(r"^[-*_]{3,}$", stripped):
+                output.append("\\begin{enumerate}")
+                in_ordered_list = True
+            rest = re.split(r"^\d+[.)]\s", line_content, maxsplit=1)
+            output.append(f"  \\item {apply_inline_latex(rest[1] if len(rest) > 1 else line_content)}")
+        elif re.match(r"^[-*_]{3,}$", line_content):
             flush_lists()
-            out.append("\\vspace{4pt}\\textcolor{slate}{\\hrule}\\vspace{4pt}")
-
-        # Normal paragraph
+            output.append("\\vspace{4pt}\\textcolor{slate}{\\hrule}\\vspace{4pt}")
         else:
             flush_lists()
-            out.append(apply_inline_latex(stripped))
-            out.append("")
+            output.append(apply_inline_latex(line_content))
+            output.append("")
 
         i += 1
 
     flush_lists()
-    return "\n".join(out)
+    return "\n".join(output)
 
 
 def parse_sections(text: str) -> dict[str, str]:
-    keys    = ["โจทย์", "แนวคิด", "วิธีทำ", "คำตอบ"]
-    pattern = (
-        r"##\s+(" + "|".join(keys) + r")\s*\n"
-        r"(.*?)(?=##\s+(?:" + "|".join(keys) + r")|$)"
+    section_headings = ["โจทย์", "แนวคิด", "วิธีทำ", "คำตอบ"]
+    section_pattern = (
+        r"##\s+(" + "|".join(section_headings) + r")\s*\n"
+        r"(.*?)(?=##\s+(?:" + "|".join(section_headings) + r")|$)"
     )
     return {
         m.group(1).strip(): m.group(2).strip()
-        for m in re.finditer(pattern, text, re.DOTALL)
+        for m in re.finditer(section_pattern, text, re.DOTALL)
     }
 
 
@@ -471,8 +473,8 @@ def build_preamble(fonts_path: str, reg_stem: str, bold_stem: str) -> str:
         "\\usepackage{polyglossia}\n"
         "\\setmainlanguage{thai}\n"
         "\\setotherlanguage{english}\n"
-        + font_block +
-        "\\usepackage[a4paper,left=2.5cm,right=2.5cm,top=2cm,bottom=2cm]{geometry}\n"
+        + font_block
+        + "\\usepackage[a4paper,left=2.5cm,right=2.5cm,top=2cm,bottom=2cm]{geometry}\n"
         "\\usepackage{xcolor}\n"
         "\\usepackage{tcolorbox}\n"
         "\\tcbuselibrary{skins,breakable}\n"
@@ -511,10 +513,10 @@ def build_preamble(fonts_path: str, reg_stem: str, bold_stem: str) -> str:
 
 
 def build_tex(sections: dict[str, str], timestamp: str) -> str:
-    johtay  = md_to_latex(sections.get("โจทย์",  ""))
-    concept = md_to_latex(sections.get("แนวคิด", ""))
-    steps   = md_to_latex(sections.get("วิธีทำ", ""))
-    answer  = md_to_latex(sections.get("คำตอบ",  ""))
+    problem_body = md_to_latex(sections.get("โจทย์", ""))
+    concept_body = md_to_latex(sections.get("แนวคิด", ""))
+    solution_body = md_to_latex(sections.get("วิธีทำ", ""))
+    answer_body = md_to_latex(sections.get("คำตอบ", ""))
 
     return (
         "\\input{preamble.tex}\n"
@@ -530,77 +532,26 @@ def build_tex(sections: dict[str, str], timestamp: str) -> str:
         "\n"
         "\\sectbox{1.\\ โจทย์ (Problem)}\n"
         "\\begin{problemenv}\n"
-        + johtay + "\n"
+        + problem_body + "\n"
         "\\end{problemenv}\n"
         "\n"
         "\\vspace{6pt}\n"
         "\\sectbox{2.\\ แนวคิด (Concept)}\n"
-        + concept + "\n"
+        + concept_body + "\n"
         "\n"
         "\\sectbox{3.\\ วิธีทำ (Solution)}\n"
-        + steps + "\n"
+        + solution_body + "\n"
         "\n"
         "\\sectbox{4.\\ คำตอบ (Answer)}\n"
         "\\begin{ansenv}\n"
-        + answer + "\n"
+        + answer_body + "\n"
         "\\end{ansenv}\n"
         "\n"
         "\\end{document}\n"
     )
 
 
-# ─── Cached System Prompts ────────────────────────────────────────────────────
-
-# _ANSWER_SYSTEM = (
-#     "ตอบโจทย์ที่ user ส่งมาเป็นภาษาไทย โดยจัดรูปแบบตามหัวข้อด้านล่างนี้เท่านั้น "
-#     "(ห้ามเพิ่มหรือเปลี่ยนชื่อหัวข้อ):\n\n"
-#     "## โจทย์\n"
-#     "[สรุปโจทย์ที่ได้รับ]\n\n"
-#     "## แนวคิด\n"
-#     "[อธิบายทฤษฎีหรือวิธีการที่ใช้ เป็นภาษาไทยปนศัพท์เทคนิคภาษาอังกฤษ "
-#     "เหมาะสำหรับนักเรียนระดับมัธยมปลาย ให้เข้าใจว่าใช้หลักการใดและทำไม]\n\n"
-#     "## วิธีทำ\n"
-#     "[แสดงขั้นตอนการแก้โจทย์อย่างละเอียดเป็นลำดับขั้น]\n\n"
-#     "## คำตอบ\n"
-#     "[คำตอบสุดท้ายพร้อมหน่วย (ถ้ามี)]\n\n"
-#     "---\n"
-#     "กฎการเขียนสัญลักษณ์คณิตศาสตร์ (ต้องปฏิบัติตามเสมอ):\n"
-#     "- Inline math: ใช้ $...$ เช่น $x^2 + y^2 = r^2$ ภายในย่อหน้า\n"
-#     "- Display math: ใช้ $$...$$ บนบรรทัดเดี่ยวของตัวเอง เช่น\n"
-#     "  $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$\n"
-#     "- ใช้ LaTeX syntax: \\frac{}{}, \\sqrt{}, \\sum_{i=1}^{n}, \\int, ^, _"
-# )
-
-# _ANSWER_SYSTEM = (
-#     "You are a math and computer science tutor for Thai high school students "
-#     "(middle to upper secondary level, e.g. POSN olympiad prep).\n\n"
-
-#     "The user will send you an image of an exam or homework question. "
-#     "Read the question from the image, then provide a complete answer.\n\n"
-
-#     "Always respond in Thai, except for technical terms, variable names, and LaTeX.\n\n"
-
-#     "Structure your response using EXACTLY these markdown headings — no additions or renames:\n\n"
-#     "## โจทย์\n"
-#     "Restate the problem clearly and concisely in Thai.\n\n"
-#     "## แนวคิด\n"
-#     "Explain the underlying theory or technique in Thai mixed with English technical terms. "
-#     "Focus on *why* this approach works, at a level suitable for a motivated high-school student.\n\n"
-#     "## วิธีทำ\n"
-#     "Show the full step-by-step solution. Number each step. "
-#     "Justify non-obvious transitions.\n\n"
-#     "## คำตอบ\n"
-#     "State the final answer, including units if applicable.\n\n"
-
-#     "---\n"
-#     "Math formatting rules (always follow):\n"
-#     "- Inline math: $...$ — e.g. $x^2 + y^2 = r^2$\n"
-#     "- Display math: $$...$$ on its own line — e.g.\n"
-#     "  $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$\n"
-#     "- Use LaTeX: \\frac{}{}, \\sqrt{}, \\sum_{i=1}^{n}, \\binom{n}{k}, \\int, ^, _\n"
-#     "- Never use Unicode math symbols (×, ÷, ²) — use LaTeX equivalents instead.\n"
-#     "- Never use emoji or decorative symbols (✅, ❌, 🎯, 💡, etc.) anywhere in the response."
-# )
+# ─── System Prompt ────────────────────────────────────────────────────────────
 
 _ANSWER_SYSTEM = (
     "You are a math and computer science tutor for Thai high school students "
@@ -641,13 +592,13 @@ _ANSWER_SYSTEM = (
 )
 
 
-def _fmt_usage(u) -> str:
-    """Format token usage including cache stats."""
-    parts = [f"in={u.input_tokens}", f"out={u.output_tokens}"]
-    if hasattr(u, "cache_creation_input_tokens") and u.cache_creation_input_tokens:
-        parts.append(f"cache_write={u.cache_creation_input_tokens}")
-    if hasattr(u, "cache_read_input_tokens") and u.cache_read_input_tokens:
-        parts.append(f"cache_read={u.cache_read_input_tokens}")
+def _format_api_usage(api_usage) -> str:
+    """Format token usage including cache stats as a compact string."""
+    parts = [f"in={api_usage.input_tokens}", f"out={api_usage.output_tokens}"]
+    if getattr(api_usage, "cache_creation_input_tokens", 0):
+        parts.append(f"cache_write={api_usage.cache_creation_input_tokens}")
+    if getattr(api_usage, "cache_read_input_tokens", 0):
+        parts.append(f"cache_read={api_usage.cache_read_input_tokens}")
     return "  ".join(parts)
 
 
@@ -656,52 +607,49 @@ def _fmt_usage(u) -> str:
 def image_to_base64(path: str) -> tuple[str, str]:
     ext_map = {
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".png": "image/png",  ".gif": "image/gif",  ".webp": "image/webp",
+        ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
     }
     media_type = ext_map.get(Path(path).suffix.lower(), "image/jpeg")
-    with open(path, "rb") as fh:
-        return base64.standard_b64encode(fh.read()).decode(), media_type
+    with open(path, "rb") as file_handle:
+        return base64.standard_b64encode(file_handle.read()).decode(), media_type
 
 
 def process_image(client: anthropic.Anthropic, image_path: str, usage: Usage) -> str:
     """Send image to Claude in one call: extract question + return structured answer."""
-    stats = load_token_stats()
-    max_tok = compute_max_tokens(stats)
+    token_history = load_token_stats()
+    max_output_tokens = compute_max_tokens(token_history)
 
     print(f"\n📷  Processing: {image_path}\n" + "─" * 60)
-    print(f"   max_tokens={max_tok}  (history={len(stats)} samples)")
-    img_data, media_type = image_to_base64(image_path)
-    parts: list[str] = []
+    print(f"   max_tokens={max_output_tokens}  (history={len(token_history)} samples)")
+    image_b64_data, media_type = image_to_base64(image_path)
+    response_chunks: list[str] = []
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
-        max_tokens=max_tok,
-        system=[{
-            "type": "text",
-            "text": _ANSWER_SYSTEM,
-        }],
+        max_tokens=max_output_tokens,
+        system=[{"type": "text", "text": _ANSWER_SYSTEM}],
         messages=[{
             "role": "user",
             "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},
-                {"type": "text",  "text": "กรุณาตอบโจทย์จากรูปภาพนี้"},
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64_data}},
+                {"type": "text", "text": "กรุณาตอบโจทย์จากรูปภาพนี้"},
             ],
         }],
     ) as stream:
-        for text in stream.text_stream:
-            parts.append(text)
-            print(text, end="", flush=True)
+        for text_chunk in stream.text_stream:
+            response_chunks.append(text_chunk)
+            print(text_chunk, end="", flush=True)
 
-    msg = stream.get_final_message()
-    usage.add(msg.usage)
+    final_message = stream.get_final_message()
+    usage.add(final_message.usage)
 
-    stats.append(msg.usage.output_tokens)
-    save_token_stats(stats)
+    token_history.append(final_message.usage.output_tokens)
+    save_token_stats(token_history)
 
-    print(f"\n   [DEBUG] raw usage: {msg.usage}")
-    print(f"   tokens: {_fmt_usage(msg.usage)}")
+    print(f"\n   [DEBUG] raw usage: {final_message.usage}")
+    print(f"   tokens: {_format_api_usage(final_message.usage)}")
     print("─" * 60)
-    return "".join(parts)
+    return "".join(response_chunks)
 
 
 # ─── PDF Creation via XeLaTeX ─────────────────────────────────────────────────
@@ -715,15 +663,55 @@ def _find_xelatex() -> str | None:
         Path("C:/Program Files/MiKTeX/miktex/bin/x64/xelatex.exe"),
         Path("C:/Program Files (x86)/MiKTeX/miktex/bin/xelatex.exe"),
     ]
-    for p in candidates:
-        if p.exists():
-            return str(p)
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
     return None
 
 
+def _write_latex_files(
+    build_dir: Path, answer: str, fonts_path: str, reg_stem: str, bold_stem: str
+) -> None:
+    """Write preamble.tex and output.tex into the build directory."""
+    timestamp = datetime.now().strftime("%d %B %Y, %H:%M")
+    sections = parse_sections(answer)
+    (build_dir / "preamble.tex").write_text(
+        build_preamble(fonts_path, reg_stem, bold_stem), encoding="utf-8"
+    )
+    (build_dir / "output.tex").write_text(build_tex(sections, timestamp), encoding="utf-8")
+
+
+def _compile_xelatex(xelatex_path: str, build_dir: Path) -> tuple[bool, list[str]]:
+    """Run xelatex twice (for cross-references); return (success, log_lines)."""
+    log_lines: list[str] = []
+    compilation_succeeded = True
+    for _ in range(2):
+        proc = subprocess.run(
+            [xelatex_path, "-interaction=nonstopmode", "output.tex"],
+            cwd=build_dir, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        log_lines = proc.stdout.splitlines()
+        if proc.returncode != 0:
+            compilation_succeeded = False
+    return compilation_succeeded, log_lines
+
+
+def _save_build_log(build_dir: Path, log_lines: list[str], output_path: str) -> Path:
+    """Copy the XeLaTeX log to LOG_DIR; return the destination path."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    output_stem = Path(output_path).stem
+    log_destination = LOG_DIR / f"{output_stem}.log"
+    build_log_path = build_dir / "output.log"
+    if build_log_path.exists():
+        shutil.copy2(build_log_path, log_destination)
+    else:
+        log_destination.write_text("\n".join(log_lines), encoding="utf-8")
+    return log_destination
+
+
 def create_pdf(answer: str, output_path: str) -> None:
-    xelatex = _find_xelatex()
-    if not xelatex:
+    xelatex_path = _find_xelatex()
+    if not xelatex_path:
         print("❌  xelatex not found.")
         print("   Windows : install MiKTeX → https://miktex.org/")
         print("   Linux   : sudo apt install texlive-xetex texlive-lang-other")
@@ -732,55 +720,30 @@ def create_pdf(answer: str, output_path: str) -> None:
     print("\n📄  Resolving fonts...")
     fonts_path, reg_stem, bold_stem = resolve_fonts()
 
-    tmp = Path(tempfile.mkdtemp(prefix="qalatex_"))
-    print(f"📄  Build dir: {tmp}")
+    build_dir = Path(tempfile.mkdtemp(prefix="qalatex_"))
+    print(f"📄  Build dir: {build_dir}")
 
-    (tmp / "preamble.tex").write_text(
-        build_preamble(fonts_path, reg_stem, bold_stem), encoding="utf-8"
-    )
-
-    timestamp = datetime.now().strftime("%d %B %Y, %H:%M")
-    sections  = parse_sections(answer)
-    (tmp / "output.tex").write_text(
-        build_tex(sections, timestamp), encoding="utf-8"
-    )
+    _write_latex_files(build_dir, answer, fonts_path, reg_stem, bold_stem)
 
     print("📄  Compiling (XeLaTeX)...")
-    log_lines: list[str] = []
-    ok = True
-    for _ in range(2):
-        proc = subprocess.run(
-            [xelatex, "-interaction=nonstopmode", "output.tex"],
-            cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
-        log_lines = proc.stdout.splitlines()
-        if proc.returncode != 0:
-            ok = False
+    compilation_succeeded, log_lines = _compile_xelatex(xelatex_path, build_dir)
 
-    # Save log to log/ folder (always, success or failure)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    stem    = Path(output_path).stem
-    log_dst = LOG_DIR / f"{stem}.log"
-    src_log = tmp / "output.log"
-    if src_log.exists():
-        shutil.copy2(src_log, log_dst)
-    else:
-        log_dst.write_text("\n".join(log_lines), encoding="utf-8")
-    print(f"📋  Log saved: {log_dst.resolve()}")
+    log_destination = _save_build_log(build_dir, log_lines, output_path)
+    print(f"📋  Log saved: {log_destination.resolve()}")
 
-    if not ok:
+    if not compilation_succeeded:
         print("❌  Compilation failed. Errors:")
         for line in log_lines:
             if line.startswith(("!", "Error", "LaTeX Warning: Font")):
                 print(f"   {line}")
         sys.exit(1)
 
-    pdf_src = tmp / "output.pdf"
-    if not pdf_src.exists():
+    compiled_pdf = build_dir / "output.pdf"
+    if not compiled_pdf.exists():
         print("❌  output.pdf not produced.")
         sys.exit(1)
 
-    shutil.copy2(pdf_src, output_path)
+    shutil.copy2(compiled_pdf, output_path)
     print(f"✅  PDF saved: {Path(output_path).resolve()}")
 
 
@@ -792,7 +755,6 @@ def process_one(client: anthropic.Anthropic, img_path: Path, usage: Usage) -> No
     DONE_DIR.mkdir(parents=True, exist_ok=True)
 
     output_pdf = OUTPUT_DIR / f"{img_path.stem}_answer.pdf"
-
     answer = process_image(client, str(img_path), usage)
     create_pdf(answer, str(output_pdf))
 
@@ -800,40 +762,43 @@ def process_one(client: anthropic.Anthropic, img_path: Path, usage: Usage) -> No
     print(f"📦  Moved  {img_path.name}  →  input_done/")
 
 
+def _print_usage_summary(usage: Usage) -> None:
+    print(f"\n── Token Usage ──────────────────────────────────────────")
+    print(usage.summary())
+
+
 def run_batch(client: anthropic.Anthropic) -> None:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    images = sorted(
-        [f for f in INPUT_DIR.iterdir() if f.suffix.lower() in _IMAGE_EXTS]
-    )
+    all_images = sorted(f for f in INPUT_DIR.iterdir() if f.suffix.lower() in _IMAGE_EXTS)
 
-    if not images:
+    if not all_images:
         print("📂  input/ is empty — nothing to process.")
         return
 
     batch_size = int(load_config().get("batch_size", 5))
-    batch      = images[:batch_size]
+    batch = all_images[:batch_size]
 
-    print(f"📋  Found {len(images)} image(s), processing {len(batch)} (batch_size={batch_size})")
+    print(f"📋  Found {len(all_images)} image(s), processing {len(batch)} (batch_size={batch_size})")
 
     usage = Usage()
-    ok = err = 0
+    success_count = failure_count = 0
     for img_path in batch:
         print(f"\n{'=' * 60}")
         print(f"🖼   {img_path.name}")
         try:
             process_one(client, img_path, usage)
-            ok += 1
+            success_count += 1
         except Exception as exc:
             print(f"❌  Failed: {exc}")
-            err += 1
+            failure_count += 1
 
     print(f"\n{'=' * 60}")
-    print(f"Done — {ok} succeeded, {err} failed.")
-    if images[batch_size:]:
-        print(f"📂  {len(images) - batch_size} image(s) remaining in input/")
-    print(f"\n── Token Usage ──────────────────────────────────────────")
-    print(usage.summary())
+    print(f"Done — {success_count} succeeded, {failure_count} failed.")
+    remaining = len(all_images) - batch_size
+    if remaining > 0:
+        print(f"📂  {remaining} image(s) remaining in input/")
+    _print_usage_summary(usage)
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -848,19 +813,20 @@ def main() -> None:
 
     # Single-file mode: python main.py <image> [output.pdf]
     if len(sys.argv) >= 2:
-        img = Path(sys.argv[1])
-        if not img.exists():
-            print(f"Error: file not found – {img}")
+        image_path = Path(sys.argv[1])
+        if not image_path.exists():
+            print(f"Error: file not found – {image_path}")
             sys.exit(1)
-        out = Path(sys.argv[2]) if len(sys.argv) >= 3 else Path(f"{img.stem}_answer.pdf")
+        output_pdf = (
+            Path(sys.argv[2]) if len(sys.argv) >= 3 else Path(f"{image_path.stem}_answer.pdf")
+        )
         print("🚀  QA Claude – single file mode")
         print("=" * 60)
-        usage  = Usage()
-        answer = process_image(client, str(img), usage)
-        create_pdf(answer, str(out))
-        print(f"\n── Token Usage ──────────────────────────────────────────")
-        print(usage.summary())
-        print(f"\n✨  Done  →  {out.resolve()}")
+        usage = Usage()
+        answer = process_image(client, str(image_path), usage)
+        create_pdf(answer, str(output_pdf))
+        _print_usage_summary(usage)
+        print(f"\n✨  Done  →  {output_pdf.resolve()}")
         return
 
     # Batch mode: read from input/, output to output/, move done to input_done/
