@@ -89,9 +89,9 @@ class Usage:
         # lines.append(f"  Est. cost (USD)    : ${self.cost_usd():.4f}")
         cost = self.cost_usd()
         if cost < 0.001:
-            lines.append(f"  Est. cost (USD)    : ${cost:.2e}")   # → $4.39e-05
+            lines.append(f"  Est. cost (USD)    : ${cost:.2e} : thb {cost*33:.2f}")   # → $4.39e-05
         else:
-            lines.append(f"  Est. cost (USD)    : ${cost:.6f}")
+            lines.append(f"  Est. cost (USD)    : ${cost:.6f} : thb {cost*33:.2f}")
         return "\n".join(lines)
 
 
