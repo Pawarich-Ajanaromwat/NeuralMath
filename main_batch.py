@@ -36,7 +36,11 @@ CONFIG_FILE = BASE_DIR / "config.json"
 STATS_FILE = BASE_DIR / "stats.json"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-_DEFAULT_CONFIG: dict = {"batch_size": 5}
+_DEFAULT_CONFIG: dict = {
+    "batch_size": 5,
+    "number_of_repetitions": 1,
+    "wait_time_between_repetitions": 60,
+}
 
 # Adaptive max_tokens bounds
 _MIN_MAX_TOKENS = 800
@@ -948,7 +952,19 @@ def main() -> None:
     # Batch mode: read from input/, output to output/, move done to input_done/
     print("🚀  QA Claude – batch mode")
     print("=" * 60)
-    run_batch(client)
+
+    cfg = load_config()
+    repetitions = int(cfg.get("number_of_repetitions", 1))
+    wait_seconds = int(cfg.get("wait_time_between_repetitions", 60))
+
+    for rep in range(repetitions):
+        if repetitions > 1:
+            print(f"\n🔁  รอบที่ {rep + 1} / {repetitions}")
+            print("=" * 60)
+        run_batch(client)
+        if rep < repetitions - 1:
+            print(f"\n⏱   รอ {wait_seconds} วินาทีก่อนรอบถัดไป...")
+            time.sleep(wait_seconds)
 
 
 if __name__ == "__main__":
