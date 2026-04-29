@@ -1,3 +1,5 @@
 {
-  "batch_size": 5
+  "batch_size": 2,
+  "number_of_repetitions": 1,
+  "wait_time_between_repetitions": 2
 }

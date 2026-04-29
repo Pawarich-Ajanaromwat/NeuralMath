@@ -489,6 +489,7 @@ def build_preamble(fonts_path: str, reg_stem: str, bold_stem: str) -> str:
         "\\usepackage{tcolorbox}\n"
         "\\tcbuselibrary{skins,breakable}\n"
         "\\usepackage{amsmath,amssymb}\n"
+        "\\usepackage{cancel}\n"
         "\\usepackage{enumitem}\n"
         "\n"
         "\\definecolor{primary}{HTML}{2563EB}\n"
@@ -682,6 +683,7 @@ def process_image(client: anthropic.Anthropic, image_path: str, usage: Usage) ->
     image_b64_data, media_type = image_to_base64(image_path)
     response_chunks: list[str] = []
 
+    t0 = time.perf_counter()
     with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=max_output_tokens,
@@ -706,6 +708,7 @@ def process_image(client: anthropic.Anthropic, image_path: str, usage: Usage) ->
 
     print(f"\n   [DEBUG] raw usage: {final_message.usage}")
     print(f"   tokens: {_format_api_usage(final_message.usage)}")
+    print(f"   elapsed: {_fmt_elapsed(time.perf_counter() - t0)}")
     print("─" * 60)
     return "".join(response_chunks)
 
@@ -767,13 +770,11 @@ def _save_build_log(build_dir: Path, log_lines: list[str], output_path: str) -> 
     return log_destination
 
 
-def create_pdf(answer: str, output_path: str) -> None:
-    xelatex_path = _find_xelatex()
+def create_pdf(answer: str, output_path: str, xelatex_path: str | None = None) -> None:
+    if xelatex_path is None:
+        xelatex_path = _find_xelatex()
     if not xelatex_path:
-        print("❌  xelatex not found.")
-        print("   Windows : install MiKTeX → https://miktex.org/")
-        print("   Linux   : sudo apt install texlive-xetex texlive-lang-other")
-        sys.exit(1)
+        raise RuntimeError("xelatex not found — install MiKTeX (Windows) or texlive-xetex (Linux)")
 
     print("\n📄  Resolving fonts...")
     fonts_path, reg_stem, bold_stem = resolve_fonts()
@@ -790,16 +791,15 @@ def create_pdf(answer: str, output_path: str) -> None:
     print(f"📋  Log saved: {log_destination.resolve()}")
 
     if not compilation_succeeded:
+        error_lines = [l for l in log_lines if l.startswith(("!", "Error", "LaTeX Warning: Font"))]
         print("❌  Compilation failed. Errors:")
-        for line in log_lines:
-            if line.startswith(("!", "Error", "LaTeX Warning: Font")):
-                print(f"   {line}")
-        sys.exit(1)
+        for line in error_lines:
+            print(f"   {line}")
+        raise RuntimeError("XeLaTeX compilation failed — see log: " + str(log_destination))
 
     compiled_pdf = build_dir / "output.pdf"
     if not compiled_pdf.exists():
-        print("❌  output.pdf not produced.")
-        sys.exit(1)
+        raise RuntimeError("XeLaTeX compiled but produced no PDF")
 
     shutil.copy2(compiled_pdf, output_path)
     print(f"✅  PDF saved: {Path(output_path).resolve()}")
@@ -807,12 +807,19 @@ def create_pdf(answer: str, output_path: str) -> None:
 
 # ─── Batch Processing ─────────────────────────────────────────────────────────
 
+def _fmt_elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m {seconds % 60:.1f}s"
+
+
 def _print_usage_summary(usage: Usage) -> None:
     print(f"\n── Token Usage ──────────────────────────────────────────")
     print(usage.summary())
 
 
 def run_batch(client: anthropic.Anthropic) -> None:
+    t_start = time.perf_counter()
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     all_images = sorted(f for f in INPUT_DIR.iterdir() if f.suffix.lower() in _IMAGE_EXTS)
@@ -820,6 +827,13 @@ def run_batch(client: anthropic.Anthropic) -> None:
     if not all_images:
         print("📂  input/ is empty — nothing to process.")
         return
+
+    xelatex_path = _find_xelatex()
+    if not xelatex_path:
+        print("❌  xelatex not found — cannot create PDFs.")
+        print("   Windows : install MiKTeX → https://miktex.org/")
+        print("   Linux   : sudo apt install texlive-xetex texlive-lang-other")
+        sys.exit(1)
 
     batch_size = int(load_config().get("batch_size", 5))
     batch_images = all_images[:batch_size]
@@ -836,14 +850,15 @@ def run_batch(client: anthropic.Anthropic) -> None:
     for img_path in batch_images:
         req = _build_batch_request(img_path, max_tokens)
         requests.append(req)
-        img_map[img_path.name] = img_path
+        img_map[req["custom_id"]] = img_path
         print(f"   + {img_path.name}")
 
     print(f"\n⏳  Submitting {len(requests)} request(s) to Batch API...")
     results = _submit_and_poll_batch(client, requests)
 
     usage = Usage(batch=True)
-    success_count = failure_count = 0
+    success_count = 0
+    failures: list[tuple[str, str]] = []  # (filename, reason)
     new_token_samples: list[int] = []
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -863,26 +878,34 @@ def run_batch(client: anthropic.Anthropic) -> None:
             stem = Path(result.custom_id).stem
             output_pdf = OUTPUT_DIR / f"{stem}_answer.pdf"
             try:
-                create_pdf(answer, str(output_pdf))
+                create_pdf(answer, str(output_pdf), xelatex_path=xelatex_path)
                 if img_path:
                     shutil.move(str(img_path), DONE_DIR / img_path.name)
                     print(f"📦  Moved  {name}  →  input_done/")
                 success_count += 1
             except Exception as exc:
                 print(f"❌  PDF failed: {exc}")
-                failure_count += 1
+                failures.append((name, str(exc)))
         else:
-            print(f"❌  Result: {result.result.type}")
+            reason = result.result.type
             if hasattr(result.result, "error"):
-                print(f"   {result.result.error}")
-            failure_count += 1
+                reason = f"{reason}: {result.result.error}"
+            print(f"❌  API error: {reason}")
+            failures.append((name, reason))
 
     if new_token_samples:
         token_history.extend(new_token_samples)
         save_token_stats(token_history)
 
     print(f"\n{'=' * 60}")
-    print(f"Done — {success_count} succeeded, {failure_count} failed.")
+    print(f"Done — {success_count} succeeded, {len(failures)} failed.  [{_fmt_elapsed(time.perf_counter() - t_start)}]")
+
+    if failures:
+        print(f"\n⚠️  Failed images ({len(failures)}):")
+        for fname, reason in failures:
+            print(f"   • {fname}")
+            print(f"     {reason}")
+
     remaining = len(all_images) - batch_size
     if remaining > 0:
         print(f"📂  {remaining} image(s) remaining in input/")
@@ -910,11 +933,16 @@ def main() -> None:
         )
         print("🚀  QA Claude – single file mode")
         print("=" * 60)
+        t_start = time.perf_counter()
         usage = Usage()
-        answer = process_image(client, str(image_path), usage)
-        create_pdf(answer, str(output_pdf))
+        try:
+            answer = process_image(client, str(image_path), usage)
+            create_pdf(answer, str(output_pdf))
+        except RuntimeError as exc:
+            print(f"\n❌  {exc}")
+            sys.exit(1)
         _print_usage_summary(usage)
-        print(f"\n✨  Done  →  {output_pdf.resolve()}")
+        print(f"\n✨  Done  →  {output_pdf.resolve()}  [{_fmt_elapsed(time.perf_counter() - t_start)}]")
         return
 
     # Batch mode: read from input/, output to output/, move done to input_done/
