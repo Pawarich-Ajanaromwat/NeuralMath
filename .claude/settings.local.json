@@ -3,7 +3,10 @@
     "allow": [
       "Bash(python -)",
       "Skill(claude-api)",
-      "Skill(claude-api:*)"
+      "Skill(claude-api:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('qa_common.py', encoding='utf-8'\\).read\\(\\)\\); print\\('qa_common.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('main_python.py', encoding='utf-8'\\).read\\(\\)\\); print\\('main_python.py: OK'\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }
