@@ -37,6 +37,7 @@ STATS_FILE = BASE_DIR / "stats.json"
 STATS_PYTHON_FILE = BASE_DIR / "stats_python.json"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+_PDF_EXTS = {".pdf"}
 _DEFAULT_CONFIG: dict = {
     "batch_size": 5,
     "number_of_repetitions": 1,
@@ -46,9 +47,14 @@ _DEFAULT_CONFIG: dict = {
 # Adaptive max_tokens bounds
 _MIN_MAX_TOKENS = 800
 _MAX_MAX_TOKENS = 4096
-_DEFAULT_MAX_TOKENS = 3000
+_MAX_MAX_TOKENS_PYTHON = 8192  # claude-sonnet-4-6 model ceiling
+_DEFAULT_MAX_TOKENS = 1500
+_DEFAULT_MAX_TOKENS_PYTHON = _MAX_MAX_TOKENS_PYTHON
 _STATS_WINDOW = 50
 _STATS_MIN_SAMPLES = 5
+
+# Extended thinking for Python mode (thinking tokens count toward max_tokens)
+_PYTHON_THINKING_BUDGET = 4000
 
 # claude-sonnet-4-6 pricing (USD per 1 M tokens)
 _PRICE_USD = {
@@ -137,6 +143,14 @@ def compute_max_tokens(samples: list[int]) -> int:
     ninetieth_percentile = sorted(samples)[int(len(samples) * 0.9)]
     adaptive_limit = int(ninetieth_percentile * 1.2)
     return max(_MIN_MAX_TOKENS, min(_MAX_MAX_TOKENS, adaptive_limit))
+
+def compute_max_tokens_python(samples: list[int]) -> int:
+    """Return adaptive max_tokens from historical output token counts (p90 + 20% buffer)."""
+    if len(samples) < _STATS_MIN_SAMPLES:
+        return _DEFAULT_MAX_TOKENS_PYTHON
+    ninetieth_percentile = sorted(samples)[int(len(samples) * 0.9)]
+    adaptive_limit = int(ninetieth_percentile * 1.2)
+    return max(_MIN_MAX_TOKENS, min(_MAX_MAX_TOKENS_PYTHON, adaptive_limit))
 
 
 # ─── Font Resolution ──────────────────────────────────────────────────────────
@@ -666,6 +680,12 @@ def image_to_base64(path: str) -> tuple[str, str]:
         return base64.standard_b64encode(file_handle.read()).decode(), media_type
 
 
+def pdf_to_base64(path: str) -> str:
+    """Read a PDF file and return its base64-encoded content."""
+    with open(path, "rb") as file_handle:
+        return base64.standard_b64encode(file_handle.read()).decode()
+
+
 def process_image(client: anthropic.Anthropic, image_path: str, usage: Usage) -> str:
     """Send image to Claude via streaming: extract question + return structured answer."""
     token_history = load_token_stats()
@@ -817,7 +837,7 @@ _PYTHON_ANSWER_SYSTEM = (
     "You are a Python programming teacher for Thai middle and high school students "
     "(secondary school, ages 12–18).\n\n"
 
-    "The user will send you an image of a Python programming exam question. "
+    "The user will send you a PDF of a Python programming exam question. "
     "Solve it completely AND teach the student WHY it works — "
     "like a patient, encouraging teacher explaining to a friend.\n\n"
 
@@ -831,7 +851,7 @@ _PYTHON_ANSWER_SYSTEM = (
     "(no additions, no renames):\n\n"
 
     "## โจทย์\n"
-    "อ่านโจทย์จากรูปแล้วสรุปให้ชัดเจน: โปรแกรมต้องรับ input อะไร "
+    "อ่านโจทย์จาก PDF แล้วสรุปให้ชัดเจน: โปรแกรมต้องรับ input อะไร "
     "และต้องให้ output อะไร อธิบายเป็น 1–2 ประโยค\n\n"
 
     "## แนวคิด\n"
@@ -844,9 +864,17 @@ _PYTHON_ANSWER_SYSTEM = (
     "## Python Code\n"
     "เขียน Python 3 code ที่ถูกต้อง สมบูรณ์ และอ่านง่าย\n"
     "กฎสำคัญ (ต้องทำตามเสมอ):\n"
+    "  - ใช้ if __name__ == \"__main__\":: เพื่อสอนรูปแบบมาตรฐานของ Python ในการรันไฟล์ และป้องกันไม่ให้ Code ใน main() รันโดยไม่ตั้งใจเมื่อมีการ import ไปใช้ในอนาคต\n"
+    "  - แบ่งฟังก์ชันตามหน้าที่ (Modularization): แยกการคำนวณ (Logic) ออกจากส่วนแสดงผล (UI/Print) ให้ชัดเจน เพื่อให้นักเรียนเห็นภาพว่าฟังก์ชันหนึ่งควรทำหน้าที่เพียงอย่างเดียว"
+    "  - เลือกวิธีคำนวนที่เข้าใจง่ายที่สุด ไม่ต้องกังวลเรื่องประสิทธิภาพ เนื่องจากเป้าหมายคือการสอน\n"
+    "  - หลีกเลี่ยงเทคนิคขั้นสูงที่ซับซ้อนเกินไปสำหรับนักเรียนระดับนี้ (เช่น list comprehensions, lambda, decorators) ยกเว้นว่าจำเป็นจริงๆ\n"
+    "  - ใช้ Type Hinting พื้นฐาน: แม้จะเป็นมือใหม่ แต่การระบุชนิดตัวแปร เช่น def add_numbers(a: int, b: int) -> int: จะช่วยให้นักเรียนเข้าใจว่าฟังก์ชันรับและคืนค่าอะไร โดยไม่ต้องไล่ Code นาน"
+    "  - อนุญาติให้ใช้ recursive functions ได้ แต่ต้องอธิบายแนวคิดการทำงานของ recursive ในส่วน แนวคิด ด้วย\n"
+    "  - รับ input ผ่านฟังก์ชัน input() และพิมพ์ output ด้วย print() เท่านั้น\n"
     "  - ใช้เฉพาะ ASCII ใน code (ไม่มีภาษาไทยในตัว code, comment, หรือ string ใดๆ)\n"
     "  - Comment ใน code ต้องเป็น English เท่านั้น: # like this\n"
     "  - ตั้งชื่อตัวแปรเป็น English ที่สื่อความหมาย\n"
+    "  - Step-by-Step Comments: ในฟังก์ชันที่ซับซ้อน ให้ใส่ Comment อธิบายทีละขั้นตอน (Step 1, Step 2) แทนการอธิบายรวบยอดครั้งเดียว เพื่อให้นักเรียนเห็นภาพกระบวนการคิด\n"
     "  - แสดง expected output เป็น comment ท้าย code: # Output: 42\n"
     "ครอบ code ด้วย ```python ... ```\n\n"
 
@@ -856,7 +884,17 @@ _PYTHON_ANSWER_SYSTEM = (
     "- บอกว่าทำไมถึงเขียนแบบนี้ ไม่ใช่แบบอื่น\n"
     "- ถ้ามีแนวคิดพิเศษ (เช่น modulo %, integer division //, index) "
     "ให้ยกตัวอย่างง่ายๆ ประกอบด้วย\n"
+    "Trace Table (สำหรับ Recursive): หากมีการใช้ Recursive การแสดงตารางการทำงานของ Stack (เรียกฟังก์ชันซ้อนกันอย่างไร) จะช่วยให้เด็กเห็นภาพมากกว่าคำบรรยาย"
     "ใช้หมายเลขข้อ: 1. 2. 3. ...\n\n"
+
+    "## ตรวจสอบ\n"
+    "CRITICAL — ห้ามข้ามขั้นตอนนี้เด็ดขาด ก่อนส่งคำตอบต้องทำ dry-run ดังนี้:\n"
+    "1. เลือก sample input จากโจทย์ (หรือสร้างขึ้นถ้าโจทย์ไม่ให้)\n"
+    "2. Trace ผ่านโค้ดทีละบรรทัด แสดงค่าตัวแปรแต่ละขั้นตอน\n"
+    "3. ระบุ output ที่ได้จากการ trace\n"
+    "4. เปรียบเทียบกับ expected output จากโจทย์\n"
+    "5. ถ้า output ไม่ตรง → แก้โค้ดใน section Python Code แล้ว trace ใหม่จนถูก\n"
+    "แสดงการ trace ในรูปตาราง: | บรรทัด | ตัวแปร | ค่า |\n\n"
 
     "---\n"
     "Math formatting (for explanation sections only — NOT inside code):\n"
@@ -870,7 +908,7 @@ _PYTHON_ANSWER_SYSTEM = (
 # ─── Python PDF Builders ──────────────────────────────────────────────────────
 
 def parse_python_sections(text: str) -> dict[str, str]:
-    headings = ["โจทย์", "แนวคิด", "Python Code", "อธิบายโค้ด", "คำตอบ"]
+    headings = ["โจทย์", "แนวคิด", "Python Code", "อธิบายโค้ด", "ตรวจสอบ", "คำตอบ"]
     escaped = [re.escape(h) for h in headings]
     pattern = (
         r"##\s+(" + "|".join(escaped) + r")\s*\n"
@@ -909,6 +947,12 @@ def build_python_preamble(fonts_path: str, reg_stem: str, bold_stem: str) -> str
         "  colback=purple!5, colframe=accent,\n"
         "  left=8pt, right=8pt, top=6pt, bottom=6pt, arc=4pt\n"
         "}\n"
+        "\n"
+        "\\newtcolorbox{verifyenv}{\n"
+        "  enhanced, breakable,\n"
+        "  colback=yellow!8, colframe=answer,\n"
+        "  left=8pt, right=8pt, top=6pt, bottom=6pt, arc=4pt\n"
+        "}\n"
     )
 
 
@@ -917,7 +961,16 @@ def build_python_tex(sections: dict[str, str], timestamp: str) -> str:
     concept_body = md_to_latex(sections.get("แนวคิด", ""))
     code_body = md_to_latex(sections.get("Python Code", ""))
     explain_body = md_to_latex(sections.get("อธิบายโค้ด", ""))
-    answer_body = md_to_latex(sections.get("คำตอบ", ""))
+    verify_body = md_to_latex(sections.get("ตรวจสอบ", ""))
+
+    verify_section = (
+        "\n"
+        "\\vspace{6pt}\n"
+        "\\sectbox{5.\\ ตรวจสอบ (Verification)}\n"
+        "\\begin{verifyenv}\n"
+        + verify_body + "\n"
+        "\\end{verifyenv}\n"
+    ) if verify_body.strip() else ""
 
     return (
         "\\input{preamble.tex}\n"
@@ -951,13 +1004,8 @@ def build_python_tex(sections: dict[str, str], timestamp: str) -> str:
         "\\begin{explainenv}\n"
         + explain_body + "\n"
         "\\end{explainenv}\n"
-        "\n"
-        "\\vspace{6pt}\n"
-        "\\sectbox{5.\\ คำตอบ (Answer)}\n"
-        "\\begin{ansenv}\n"
-        + answer_body + "\n"
-        "\\end{ansenv}\n"
-        "\n"
+        + verify_section
+        + "\n"
         "\\end{document}\n"
     )
 
